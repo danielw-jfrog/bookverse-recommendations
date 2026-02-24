@@ -131,7 +131,7 @@ jobs:
       - name: "[Setup] Checkout bookverse-infra for shared scripts"
         uses: actions/checkout@v4
         with:
-          repository: yonatanp-jfrog/bookverse-infra
+          repository: tomjfrog/bookverse-infra
           path: bookverse-infra
 
       # 🧠 Analysis: ML-Optimized commit analysis for deployment decisions
@@ -201,7 +201,7 @@ jobs:
       - name: "[Setup] Checkout bookverse-infra for evidence library"
         uses: actions/checkout@v4
         with:
-          repository: 'yonatanp-jfrog/bookverse-infra'
+          repository: 'tomjfrog/bookverse-infra'
           ref: 'main'
           path: 'bookverse-infra'
 
@@ -279,6 +279,12 @@ jobs:
           
           echo "oidc_token=$OIDC_TOKEN" >> $GITHUB_OUTPUT
           
+      - name: "[Setup] Verify JFrog Authentication"
+        run: |
+          echo "🔐 Verifying JFrog CLI authentication and connectivity..."
+          jf rt ping
+          echo "✅ JFrog authentication successful"
+
       - name: "[Setup] Install Python dependencies"
         run: |
           pip install --user PyYAML setuptools wheel
@@ -462,12 +468,12 @@ jobs:
           export JF_PROJECT="${{ vars.PROJECT_KEY }}"
           export JFROG_CLI_BUILD_PROJECT="${{ vars.PROJECT_KEY }}"
 
-          REPO_KEY="${{ vars.PROJECT_KEY }}-$SERVICE_NAME-internal-docker-nonprod-local"
+          REPO_KEY="${{ vars.PROJECT_KEY }}-$SERVICE_NAME-internal-docker-DEV-local"
           IMAGE_NAME="${{ vars.DOCKER_REGISTRY }}/$REPO_KEY/$SERVICE_NAME:$RECOMMENDATIONS_VERSION"
           echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
           echo "Using recommendations package version: $RECOMMENDATIONS_VERSION"
 
-          docker build --tag "$IMAGE_NAME" .
+          docker build --build-arg BUILD_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$IMAGE_NAME" .
           
           
           # Try modern command first, fallback to deprecated command for older Artifactory versions
@@ -532,7 +538,7 @@ jobs:
           
           echo "Using recommendation-config package version: $CONFIG_VERSION"
           
-          GENERIC_REPO="${{ vars.PROJECT_KEY }}-$SERVICE_NAME-internal-generic-nonprod-local"
+          GENERIC_REPO="${{ vars.PROJECT_KEY }}-$SERVICE_NAME-internal-generic-DEV-local"
           jf rt upload "dist/config/recommendations-config-$CONFIG_VERSION.tar.gz" "$GENERIC_REPO/$SERVICE_NAME/config/$CONFIG_VERSION/recommendations-config-$CONFIG_VERSION.tar.gz" \
             --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER" --project "${{ vars.PROJECT_KEY }}"
           echo "✅ Recommendation config package uploaded with version $CONFIG_VERSION"
@@ -566,7 +572,7 @@ jobs:
           
           echo "Using resources package version: $RESOURCES_VERSION"
           
-          GENERIC_REPO="${{ vars.PROJECT_KEY }}-$SERVICE_NAME-internal-generic-nonprod-local"
+          GENERIC_REPO="${{ vars.PROJECT_KEY }}-$SERVICE_NAME-internal-generic-DEV-local"
           jf rt upload "dist/resources/recommendations-resources-$RESOURCES_VERSION.tar.gz" "$GENERIC_REPO/$SERVICE_NAME/resources/$RESOURCES_VERSION/recommendations-resources-$RESOURCES_VERSION.tar.gz" \
             --build-name "$BUILD_NAME" --build-number "$BUILD_NUMBER" --project "${{ vars.PROJECT_KEY }}"
           echo "✅ Resources package uploaded with version $RESOURCES_VERSION"
@@ -605,11 +611,11 @@ jobs:
           echo "✅ Using individual package version for worker: $WORKER_TAG"
           echo "WORKER_TAG=$WORKER_TAG" >> $GITHUB_ENV
           
-          REPO_KEY="${{ vars.PROJECT_KEY }}-$SERVICE_NAME-internal-docker-nonprod-local"
+          REPO_KEY="${{ vars.PROJECT_KEY }}-$SERVICE_NAME-internal-docker-DEV-local"
           WORKER_IMAGE="${{ vars.DOCKER_REGISTRY }}/$REPO_KEY/$WORKER_NAME:$WORKER_TAG"
           echo "WORKER_IMAGE=$WORKER_IMAGE" >> $GITHUB_ENV
 
-          docker build -f Dockerfile.worker --tag "$WORKER_IMAGE" .
+          docker build --build-arg BUILD_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)" -f Dockerfile.worker --tag "$WORKER_IMAGE" .
           
           
           # Try modern command first, fallback to deprecated command for older Artifactory versions
@@ -735,7 +741,7 @@ jobs:
       - name: "[Setup] Checkout bookverse-infra for shared scripts"
         uses: actions/checkout@v4
         with:
-          repository: yonatanp-jfrog/bookverse-infra
+          repository: tomjfrog/bookverse-infra
           path: bookverse-infra
 
       - name: "[Setup] JFrog CLI"
@@ -759,7 +765,6 @@ jobs:
             echo "✅ Successfully retrieved OIDC token from JFrog CLI step output (oidc-token)"
             echo "📋 Token length: ${#PROMOTION_OIDC_TOKEN}"
             echo "promotion_oidc_token=$PROMOTION_OIDC_TOKEN" >> $GITHUB_OUTPUT
-            echo "JF_OIDC_TOKEN=$PROMOTION_OIDC_TOKEN" >> $GITHUB_ENV
           else
             echo "❌ OIDC token not available from JFrog CLI step output (oidc-token) in promotion job" >&2
             exit 1
@@ -789,6 +794,11 @@ jobs:
       - name: "[Diag] Build Info contents"
         run: |
           set -euo pipefail
+          JF_OIDC_TOKEN="${{ steps.extract-promotion-token.outputs.promotion_oidc_token }}"
+          if [[ -z "$JF_OIDC_TOKEN" ]]; then
+            echo "❌ Missing OIDC token from promotion job JFrog CLI setup." >&2
+            exit 1
+          fi
           echo "🔎 Fetching build info to confirm artifacts are present"
           ENC_BUILD_NAME=$(printf '%s' "$BUILD_NAME" | jq -sRr @uri)
           ENC_BUILD_NUMBER=$(printf '%s' "$BUILD_NUMBER" | jq -sRr @uri)
@@ -804,11 +814,12 @@ jobs:
           echo "📦 Binding artifacts from build-info: ${{ needs.build-test-publish.outputs.build_name }}/${{ needs.build-test-publish.outputs.build_number }}"
           echo "🔗 This creates an immutable link between application version and all published artifacts"
           
-           if [[ -z "${JF_OIDC_TOKEN:-}" ]]; then
-             echo "❌ Missing JF_OIDC_TOKEN. Ensure OIDC exchange step succeeded." >&2
-             exit 1
-           fi
-           echo "✅ Using JF_OIDC_TOKEN for AppTrust API authentication"
+          JF_OIDC_TOKEN="${{ steps.extract-promotion-token.outputs.promotion_oidc_token }}"
+          if [[ -z "$JF_OIDC_TOKEN" ]]; then
+            echo "❌ Missing OIDC token from promotion job JFrog CLI setup." >&2
+            exit 1
+          fi
+          echo "✅ Using OIDC token from promotion job JFrog CLI setup for AppTrust API authentication"
           
           BASE="${{ vars.JFROG_URL }}/apptrust/api/v1"
           APP_KEY="$APPLICATION_KEY"
@@ -847,7 +858,7 @@ jobs:
               echo "📝 Version $APP_VERSION already exists, continuing with promotion..."
             else
               echo "❌ Failed to create application version" >&2
-          rm -f "$RESP_BODY"
+              rm -f "$RESP_BODY"
               exit 1
             fi
           fi
@@ -891,16 +902,16 @@ jobs:
 
       - name: "[Promote & Evidence] DEV Stage"
         run: |
+          JF_OIDC_TOKEN="${{ steps.extract-promotion-token.outputs.promotion_oidc_token }}"
+          if [[ -z "$JF_OIDC_TOKEN" ]]; then
+            echo "❌ Missing OIDC token from promotion job JFrog CLI setup." >&2
+            exit 1
+          fi
           echo "🧪 Promoting application to DEV stage with automated evidence collection"
           echo "📋 Application Version: $APP_VERSION"
           echo "🎯 Target Stage: DEV (development environment for feature testing)"
           echo "🛡️ Evidence Type: Smoke tests and basic health validation"
-          
-           if [[ -z "${JF_OIDC_TOKEN:-}" ]]; then
-             echo "❌ Missing JF_OIDC_TOKEN. Ensure OIDC exchange step succeeded." >&2
-             exit 1
-           fi
-           echo "✅ Using JF_OIDC_TOKEN for DEV promotion"
+          echo "✅ Using OIDC token from promotion job JFrog CLI setup for DEV promotion"
           
           source bookverse-infra/libraries/bookverse-devops/scripts/evidence-lib.sh
           setup_promotion_environment
@@ -917,13 +928,13 @@ jobs:
 
       - name: "[Promote & Evidence] QA Stage"
         run: |
+          JF_OIDC_TOKEN="${{ steps.extract-promotion-token.outputs.promotion_oidc_token }}"
+          if [[ -z "$JF_OIDC_TOKEN" ]]; then
+            echo "❌ Missing OIDC token from promotion job JFrog CLI setup." >&2
+            exit 1
+          fi
           echo "🔍 Promoting to QA stage and generating evidence"
-          
-           if [[ -z "${JF_OIDC_TOKEN:-}" ]]; then
-             echo "❌ Missing JF_OIDC_TOKEN. Ensure OIDC exchange step succeeded." >&2
-             exit 1
-           fi
-           echo "✅ Using JF_OIDC_TOKEN for QA promotion"
+          echo "✅ Using OIDC token from promotion job JFrog CLI setup for QA promotion"
           
           source bookverse-infra/libraries/bookverse-devops/scripts/evidence-lib.sh
           setup_promotion_environment
@@ -940,13 +951,13 @@ jobs:
 
       - name: "[Promote & Evidence] STAGING Stage"
         run: |
+          JF_OIDC_TOKEN="${{ steps.extract-promotion-token.outputs.promotion_oidc_token }}"
+          if [[ -z "$JF_OIDC_TOKEN" ]]; then
+            echo "❌ Missing OIDC token from promotion job JFrog CLI setup." >&2
+            exit 1
+          fi
           echo "🏗️ Promoting to STAGING stage and generating evidence"
-          
-           if [[ -z "${JF_OIDC_TOKEN:-}" ]]; then
-             echo "❌ Missing JF_OIDC_TOKEN. Ensure OIDC exchange step succeeded." >&2
-             exit 1
-           fi
-           echo "✅ Using JF_OIDC_TOKEN for STAGING promotion"
+          echo "✅ Using OIDC token from promotion job JFrog CLI setup for STAGING promotion"
           
           source bookverse-infra/libraries/bookverse-devops/scripts/evidence-lib.sh
           setup_promotion_environment
@@ -963,13 +974,13 @@ jobs:
 
       - name: "[Promote & Evidence] PROD Stage"
         run: |
+          JF_OIDC_TOKEN="${{ steps.extract-promotion-token.outputs.promotion_oidc_token }}"
+          if [[ -z "$JF_OIDC_TOKEN" ]]; then
+            echo "❌ Missing OIDC token from promotion job JFrog CLI setup." >&2
+            exit 1
+          fi
           echo "🚀 Promoting to PROD stage and generating evidence"
-          
-           if [[ -z "${JF_OIDC_TOKEN:-}" ]]; then
-             echo "❌ Missing JF_OIDC_TOKEN. Ensure OIDC exchange step succeeded." >&2
-             exit 1
-           fi
-           echo "✅ Using JF_OIDC_TOKEN for PROD promotion"
+          echo "✅ Using OIDC token from promotion job JFrog CLI setup for PROD promotion"
           
           source bookverse-infra/libraries/bookverse-devops/scripts/evidence-lib.sh
           setup_promotion_environment
@@ -1005,6 +1016,13 @@ jobs:
           export JFROG_URL='${{ vars.JFROG_URL }}'
           export PROJECT_KEY='${{ vars.PROJECT_KEY }}'
           export APPLICATION_KEY="$APPLICATION_KEY"
+          
+          export JF_OIDC_TOKEN="${{ steps.extract-promotion-token.outputs.promotion_oidc_token }}"
+          if [[ -z "$JF_OIDC_TOKEN" ]]; then
+            echo "❌ Missing OIDC token for tag management from promotion job JFrog CLI setup." >&2
+            exit 1
+          fi
+          echo "✅ Using OIDC token from promotion job JFrog CLI setup for tag management"
           
           source bookverse-infra/libraries/bookverse-devops/scripts/tag-management-lib.sh
           
